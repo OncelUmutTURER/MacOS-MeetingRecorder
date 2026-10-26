@@ -1,0 +1,17 @@
+pyyaml>=6.0
+numpy>=1.26,<3
+
+# Transkript — Apple Silicon Metal/GPU
+mlx>=0.22
+mlx-whisper>=0.4.2
+
+# Konuşmacı ayrımı
+torch>=2.5
+torchaudio>=2.5
+pyannote.audio>=3.3.2
+
+# Action item
+anthropic>=0.40
+
+# Menü çubuğu
+rumps>=0.4.0

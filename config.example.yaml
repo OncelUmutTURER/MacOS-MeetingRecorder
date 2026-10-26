@@ -1,0 +1,286 @@
+# meeting-pipeline configuration — copy this file to config.yaml and edit it.
+#
+#     cp config.example.yaml config.yaml
+#
+# Every value below is a working default. The ones you almost certainly have to
+# change are marked CHANGE ME. See docs/SETUP.md for how to find device names.
+#
+# Comments explain WHY a value is what it is. Most of them come from measurements
+# on real recordings; ENGINEERING-NOTES.md has the full data behind them. If you
+# are about to change a number, read the note first — several of these defaults
+# were wrong once and the comment says how we found out.
+
+paths:
+  meetings_dir: "~/Meetings"      # one folder per meeting is created here
+
+audio:
+  # dual      -> microphone and loopback recorded as two separate ffmpeg inputs.
+  #              Required if you use a Bluetooth headset (they drift inside an
+  #              Aggregate Device). This is the tested path.
+  # aggregate -> one Aggregate Device, channels split afterwards. Sample-accurate,
+  #              but only usable with wired/built-in devices.
+  mode: "dual"
+
+  # --- aggregate mode only ---
+  capture_device: "Meeting Capture"
+  mic_channels: [1]
+  sys_channels: [2, 3]
+
+  # --- dual mode ---
+  # CHANGE ME. Microphone priority: the first device that is actually connected
+  # wins. Put your headset first and the built-in microphone last, so recording
+  # still starts when the headset is in its case. If a better microphone appears
+  # mid-meeting, the guard moves the microphone channel to it without cutting the
+  # loopback. `meet devices` prints the exact names macOS uses.
+  mic_priority:
+    - "My Bluetooth Headset"
+    - "MacBook Pro Microphone"
+
+  sys_device: "BlackHole 2ch"     # the virtual device the far side is captured from
+
+  # Do NOT enable this unless you have measured that you need it. It makes the
+  # file match wall-clock time, but it does so by injecting ~103 ms of silence
+  # into speech, and that measurably damages the transcript (1536 -> 1506 words
+  # on a real 10-minute recording). The timeline is corrected losslessly after
+  # transcription instead — see src/timeline.py.
+  async_compensation: false
+
+  manage_output: true       # switch system output to the Multi-Output while recording
+  restore_output: true      # and put it back afterwards
+
+  # Where to return when recording stops. A Multi-Output device is never treated
+  # as "the previous device": if it were, one unclean stop would leave you stuck
+  # in Multi-Output forever (this happened).
+  idle_output_priority:
+    - "Desk Speakers"
+    - "My Bluetooth Headset"
+    - "MacBook Pro Speakers"
+
+  # CHANGE ME. Tried in order, first match wins.
+  # match_input: if this INPUT device is connected, use this Multi-Output.
+  # null = the default profile. See docs/SETUP.md for how to create these.
+  output_profiles:
+    - match_input: "My Bluetooth Headset"
+      output: "Meeting Output BT"
+    - match_input: null
+      output: "Meeting Output SPK"
+
+  sample_rate: 48000        # raw capture
+  work_sample_rate: 16000   # what whisper and pyannote actually consume
+
+transcribe:
+  model: "mlx-community/whisper-large-v3-mlx"
+
+  # Language is a TRANSCRIPTION decision, not a recording decision: different parts
+  # of the same file can be decoded as different languages.
+  # null -> detect automatically (recommended), "en" / "tr" -> force the channel.
+  language: null
+
+  # window -> decide per speech window. Needed for bilingual meetings.
+  # once   -> decide on the longest window, apply to the whole channel. Slightly
+  #           steadier for single-language meetings, ruins a bilingual one.
+  # Locking a channel to one language makes whisper TRANSLATE foreign speech
+  # instead of transcribing it. Keep "window".
+  language_detect: "window"
+
+  # Only decide between these. Whisper knows 99 languages and wanders into
+  # neighbours on short, noisy windows; this list stops it. Add your languages.
+  language_candidates: ["en"]
+
+  language_smooth: true          # ignore one-window language flips
+  language_switch_min_prob: 0.6  # confidence needed to switch language
+
+  # Short windows cannot be trusted for language detection. Measured over 86
+  # meetings: windows labelled with the wrong language had a MEDIAN DURATION of
+  # 0.7 s and 2 words, and 39% of them were filler ("Mm-hmm"). Windows under this
+  # length are pulled to the meeting's dominant language instead.
+  lang_trust_min_s: 1.5
+  # ...but only if the dominant language really dominates. If it does not hold
+  # this share of the long windows, the meeting is genuinely bilingual and no
+  # prior is produced.
+  lang_prior_min_share: 0.7
+
+  # Apply the "Likely ASR mishearings" table from glossary.md after writing the
+  # transcript. Optional: with no glossary.md the step is skipped silently.
+  fix_terms: true
+
+  # Which jargon set goes into whisper's initial_prompt.
+  jargon_profile: "core"        # core | steel | glass | both
+  # MEASURED LIMIT, do not raise. Same audio, 10 target terms:
+  #   no prompt 0/10 · 10 terms 9/10 · 27 terms 6/10 · 40 terms 6/10
+  # A long list lowers accuracy AND makes whisper write prompt terms into the
+  # transcript as if they had been spoken. The full glossary is NOT length-limited
+  # because it is applied later, as text, not as a prompt.
+  max_prompt_terms: 16
+
+  jargon_sets:
+    # Put the handful of words your meetings are full of and ASR keeps mangling:
+    # product names, acronyms, customer names. Keep each set short.
+    core:
+      - "roadmap"
+      - "backlog"
+      - "KPI"
+    # Example domain sets (heavy industry); replace with your own.
+    steel:
+      - "ladle"
+      - "refractory"
+      - "tundish"
+      - "slagline"
+      - "caster"
+      - "campaign"
+      - "pulpit"
+      - "laser scan"
+    glass:
+      - "furnace"
+      - "forehearth"
+      - "cullet"
+      - "pull rate"
+      - "gob"
+
+  # initial_prompt template; {jargon} is replaced with the selected terms.
+  # Deliberately language-neutral — most entries are proper nouns, so this should
+  # not pull the decoder towards one language.
+  prompt_template: "{jargon}."
+
+  # VAD preprocessing: silent regions are never handed to the model. Do not turn
+  # this off — in a two-channel recording each channel is silent most of the time
+  # and whisper hallucinates loops in long digital silence.
+  vad: true
+  max_chunk_s: 30          # upper bound on a window handed to the model
+  vad_min_silence_ms: 500  # pauses shorter than this do not split speech
+  vad_pad_ms: 300          # padding added around each speech region
+
+  # Speech regions closer than this are merged into one window.
+  # CRITICAL PERFORMANCE SETTING: whisper pads every window to 30 s internally, so
+  # a 9-second window costs as much as a 30-second one. What matters is the NUMBER
+  # OF WINDOWS, not how much speech there is. Measured on a real 50-minute file:
+  #   join_gap 1.0 -> 199 windows, 100 min of padded model work  (1.00x)
+  #   join_gap 3.0 -> 140 windows,  70 min                       (1.42x)
+  #   join_gap 5.0 -> 114 windows,  57 min                       (1.75x)  <- chosen
+  #   join_gap 8.0 -> 103 windows,  52 min                       (1.93x, diminishing)
+  vad_join_gap_s: 5.0
+  highpass_hz: 80          # removes desk thumps, keyboard and fan rumble (0 = off)
+
+diarization:
+  enabled: true
+  # community-1: CC-BY-4.0, free, fully local, and measurably better than 3.1
+  # (AMI IHM 18.8% -> 17.0%, AliMeeting 24.5% -> 20.3% DER).
+  # WARNING: "speaker-diarization-precision-2" is a PAID model that runs in
+  # pyannoteAI's cloud. Do not put that name here by accident.
+  model: "pyannote/speaker-diarization-community-1"
+  device: "auto"          # auto | mps | cpu  (auto: try MPS, fall back to CPU and say so)
+  use_exclusive: true     # one speaker per instant; what matches whisper segments
+  # Cleanup: diarization produces hundredth-of-a-second turns at breath pauses and
+  # splits one speaker in two. Those stick wrong labels onto transcript segments.
+  min_turn_s: 0.4         # shorter turns are dropped
+  merge_gap_s: 0.6        # turns from the same speaker this close are merged
+  min_speakers: null      # if you know the headcount, setting these helps a lot
+  max_speakers: null
+
+me:
+  label: "Me"             # CHANGE ME — how you are labelled in the transcript
+
+post_process:
+  auto_transcribe: true   # start transcription automatically when recording stops
+  delete_mic_parts: true  # remove mic.partNN.wav once the merge is verified
+
+# Guard process: runs for the duration of each recording.
+guard:
+  enabled: true
+  poll_s: 4
+  rotate_mic: true        # move the mic channel when a higher-priority device appears
+
+  # Microphone recovery. On a Bluetooth headset the HFP profile is torn down when
+  # another app releases the microphone: the device stays open but delivers zero
+  # samples. Measured: a test call went to -94 dBFS at second 30 and the remaining
+  # 24 seconds were empty. -80 dBFS separates digital silence (-94) from a quiet
+  # room (-50).
+  recover_mic: true
+  mic_dead_db: -80
+  mic_dead_strikes: 3     # 3 × poll_s = 12 s dead before the stream is rebuilt
+
+  # The brake must be a RATE, not a total. With a fixed total of 15, a 68-minute
+  # meeting used all of them by minute 50 and the last 9 minutes were unprotected.
+  max_mic_restarts: 40         # absolute ceiling (runaway-loop safety)
+  restart_window_s: 300        # rate window
+  max_restarts_per_window: 6   # more than 6 in 5 minutes is abnormal -> pause + warn
+
+  # Stop the recording when the microphone DEVICE disappears, i.e. the headset went
+  # into its case. Without this the recording can run for hours after the meeting:
+  # the stop signal watches the OUTPUT device, and once the headset is gone that
+  # becomes the laptop Multi-Output, which anything making a sound keeps busy.
+  # Threshold-free by design, with two guards (see ENGINEERING-NOTES.md):
+  # the device must have been seen at least once, and the watched device is the
+  # highest-priority one the recording used, not whatever it fell back to.
+  stop_on_mic_gone: true
+  mic_gone_s: 90
+  # After the guard stops a recording, auto-start waits this long. Otherwise the
+  # microphone is often still active and it restarts 15 seconds later.
+  stop_cooldown_s: 300
+
+  # Loopback self-test: play a short quiet tone at the start of the recording and
+  # check BlackHole heard it. This is the real diagnostic — BlackHole is virtual
+  # and reads exactly -180 dBFS when idle, so "nobody is talking" and "no audio is
+  # reaching us at all" cannot be told apart by level.
+  loopback_selftest: true
+
+  # Silence watchdog — a wide safety net for a chain that breaks mid-meeting.
+  watch_silence: true
+  silence_grace_s: 90     # say nothing during the first 1.5 minutes
+  silence_window_s: 120   # this much UNINTERRUPTED silence is needed
+  silence_db: -70
+
+# Automatic recording. Start and stop watch DIFFERENT devices, deliberately:
+#   start -> MICROPHONE input. The meeting app opens it when the call starts.
+#   stop  -> OUTPUT (Multi-Output) device. The call keeps that stream open.
+# They cannot be the same device: once recording starts, our own ffmpeg holds the
+# microphone and BlackHole, so those flags stay lit because of us and the stop
+# condition would never be met.
+autostart:
+  enabled: false          # the menu bar switch overrides this via a flag file
+
+  start_device: null      # null -> first connected device in mic_priority (INPUT)
+  stop_device: null       # null -> the active output profile (OUTPUT)
+
+  # Second condition so dictation or Voice Memos do not start a recording.
+  # An empty list means ANY microphone use starts one.
+  require_apps:
+    - "Microsoft Teams"
+
+  poll_s: 2
+  start_after_s: 15       # start after this much uninterrupted activity
+  stop_after_s: 25        # stop after this much idle; absorbs teardown flapping
+  min_recording_s: 60     # shorter recordings are treated as false triggers
+
+  # Flapping protection. In one real incident a meeting app sent its audio straight
+  # to the headset instead of the Multi-Output, so the watched OUTPUT device looked
+  # idle forever: stop after 25 s -> microphone still active -> start after 15 s ->
+  # a 45-second loop that produced 67 folders in 73 minutes.
+  # The rule is threshold-free: if we restart right after stopping, the stop signal
+  # is wrong. After flap_max of those it is not trusted for the rest of the session,
+  # recording is held open and you get a notification.
+  flap_window_s: 180
+  flap_max: 2
+  max_recording_s: 14400  # absolute ceiling (4 hours)
+
+# Action items are normally produced by pasting the transcript into a chat
+# assistant with the prompt in docs/ACTION-ITEMS.md — no API key, no extra cost.
+# This section is the optional API path; leave it disabled unless you want it.
+actions:
+  enabled: false
+  model: "claude-sonnet-4-6"
+  max_tokens: 8000
+  report_language: "English"   # the language of the REPORT, not of the transcript
+
+# New-version check. It DOES NOT download or install anything — it looks at the
+# latest release on GitHub, tells you a newer version exists, and hands you the
+# `git pull` command.
+#
+# This is the only network call the project makes on its own, apart from
+# downloading the models: a plain GET to GitHub's public API. No meeting data, no
+# transcript, no identifier is sent; GitHub sees what it sees for any web request
+# (an IP address and a user agent). Set enabled: false and no request is made.
+updates:
+  enabled: true
+  repo: "OncelUmutTURER/MacOS-MeetingRecorder"
+  check_interval_h: 24      # never goes to the network more often than this

@@ -1,0 +1,53 @@
+# NOTE: git does NOT support trailing comments on a pattern line. A line like
+#   .env    # my token
+# is read as a pattern containing spaces and a '#', and matches nothing. Keep
+# every comment on its own line. (This bit us once, caught by bin/_publishcheck.sh.)
+
+# --- secrets and personal data: never commit ---------------------------------
+# HF_TOKEN, optionally ANTHROPIC_API_KEY
+.env
+# your device names and your label — ship config.example.yaml instead
+config.yaml
+# your product, customer and colleague names — ship glossary.example.md instead
+glossary.md
+glossary-candidates.md
+# yayın taramasında aranan kuruma özel adların listesi — bu da gizli
+.publishcheck-patterns
+*.local.yaml
+
+# --- local-only working notes (customer/personal detail) ----------------------
+# the public, sanitised version of these is ENGINEERING-NOTES.md
+CLAUDE.md
+TEST-OKUMA-METNI.md
+
+# --- runtime state ------------------------------------------------------------
+.state.json
+.autostart-enabled
+.autostart-snooze
+.autostart-cooldown
+.limit-next
+.menubar.lock
+progress.json
+timeline.json
+mic.parts.json
+
+# --- recordings and outputs ---------------------------------------------------
+# Meetings live in paths.meetings_dir (~/Meetings by default), outside the repo.
+# These patterns are a safety net in case anyone points it at the project folder.
+*.wav
+*.ffmpeg.log
+guard.log
+process.log
+*-transcript.md
+*-transcript.json
+*-transcript.raw.md
+*-corrections.md
+*-action-items.md
+*.superseded.md
+
+# --- python / macOS -----------------------------------------------------------
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.update-check.json

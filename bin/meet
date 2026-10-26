@@ -1,0 +1,106 @@
+#!/bin/bash
+# Meeting pipeline CLI
+#   meet devices              ses cihazlarını listele
+#   meet miccheck             mikrofon kanalını 10 sn kaydedip teşhis et
+#   meet start ["başlık"] [--for <dk>]
+#                             kaydı başlat (--for: bu kadar dakika sonra kendi dursun)
+#   meet stop                 kaydı durdur
+#   meet snooze <dk|off>      otomatik kaydı N dakika duraklat (süren kaydı da durdurur,
+#                             süre dolunca kendiliğinden geri açılır)
+#   meet limit <dk|off>       süren kayda süre sınırı koy/kaldır (nadiren gerekir)
+#   meet lang {tr|en|auto}    kayıt sürerken dil işareti koy (kaydı bölmez)
+#   meet status               kayıt durumu
+#   meet process [klasör]     transkript + diarization + action item (son toplantı varsayılan)
+#   meet transcribe [klasör]  sadece transkript + birleştirme
+#   meet actions [klasör]     sadece action item raporu
+#   meet watch --debug        hangi ses cihazının kullanıma girdiğini canlı izle
+#   meet watch --list         cihazların anlık kullanım durumu
+#   meet watch                otomatik kayıt servisi (menü çubuğu bunu kendi çalıştırır)
+#   meet menubar              menü çubuğu uygulamasını başlat
+#   meet install-agent        menü çubuğu her açılışta otomatik gelsin
+#   meet uninstall-agent      otomatik başlatmayı kaldır
+#   meet version              sürümü göster ve yeni yayın var mı bak (indirmez)
+#   meet check                kurulumu baştan sona doğrula (14 kontrol)
+#   meet test                 jargon/prompt sızıntısı regresyon testi
+#   meet inspect [klasör]     bir kaydı incele: seviyeler, RMS profili, loglar
+#   meet pending [--clean]    raporu bekleyen toplantıları listele / boşları temizle
+#   meet audit [--fix]        bozulma, hayalet süreç ve gereksiz dosya denetimi
+#   meet cpu [saniye]         ses altyapısı boştayken ne kadar CPU yakıyor
+#   meet fixterms <klasör|--all> [--dry-run] [--undo]
+#                             transkriptteki ölçülmüş ASR bozulmalarını onarır
+#   meet split [klasör] --suggest | --at <zaman> [--dry-run]
+#                             tek kayda düşmüş iki toplantıyı ikiye ayırır
+#   meet trim [klasör] --to <zaman> [--from <zaman>] [--dry-run]
+#                             kaydın başından/sonundan fazlalığı kırpar (ses + transkript)
+#
+# split, fixterms ve inspect için klasör yazmak zorunda değilsin: toplantı
+# klasörünün içindeysen o kullanılır (örn: cd ~/Meetings/2026-09-28-1307-auto
+# && meet split --suggest).
+set -euo pipefail
+
+# ROOT'u kendi konumundan türet — symlink üzerinden çağrılsa da, proje klasörü
+# taşınsa da çalışır. (~/.local/bin/meet buraya symlink.)
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+PY="$ROOT/venv/bin/python"
+export PATH="/opt/homebrew/bin:$PATH"
+export PYTHONPATH="$ROOT/src"
+export TOKENIZERS_PARALLELISM=false
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  devices|start|stop|status|guard|lang|limit|snooze)
+                    exec "$PY" "$ROOT/src/record.py" "$cmd" "$@" ;;
+  miccheck)   exec "$PY" "$ROOT/src/miccheck.py" "$@" ;;
+  process)    exec "$PY" "$ROOT/src/pipeline.py" --all "$@" ;;
+  transcribe) exec "$PY" "$ROOT/src/pipeline.py" --transcribe "$@" ;;
+  actions)    exec "$PY" "$ROOT/src/pipeline.py" --actions "$@" ;;
+  watch)            exec "$PY" "$ROOT/src/audiowatch.py" "$@" ;;
+  check)            exec "$ROOT/bin/selfcheck.sh" ;;
+  version|--version|-v)
+                    exec "$PY" -c "import sys; sys.path.insert(0,'$ROOT/src');
+import update
+from common import load_config
+update.cmd_version(load_config())" ;;
+  test)             "$PY" "$ROOT/tests/test_prompt_echo.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_flap.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_fixterms.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_split.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_resplit.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_autostop.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_trim.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_timeline.py" || exit 1
+                    echo
+                    "$PY" "$ROOT/tests/test_update.py" || exit 1
+                    echo
+                    exec "$PY" "$ROOT/tests/test_langprior.py" ;;
+  inspect)          exec "$ROOT/bin/inspect.sh" "$@" ;;
+  pending)          exec "$ROOT/bin/pending.sh" "$@" ;;
+  audit)            exec "$ROOT/bin/audit.sh" "$@" ;;
+  cpu)              exec "$ROOT/bin/cputest.sh" "$@" ;;
+  fixterms)         exec "$PY" "$ROOT/src/fixterms.py" "$@" ;;
+  split)            exec "$PY" "$ROOT/src/splitmeeting.py" "$@" ;;
+  trim)             exec "$PY" "$ROOT/src/trimmeeting.py" "$@" ;;
+  menubar)          exec "$PY" "$ROOT/src/menubar.py" "$@" ;;
+  install-agent)    exec "$PY" "$ROOT/src/agent.py" install ;;
+  uninstall-agent)  exec "$PY" "$ROOT/src/agent.py" uninstall ;;
+  help|--help|-h)
+    # Baştaki yorum bloğunu olduğu gibi bas — sabit satır aralığı kullanma,
+    # komut eklenince yardım sessizce eksik kalıyor.
+    sed -n '2,/^set -euo/p' "$0" | grep '^#' | sed 's/^# \{0,1\}//' ;;
+  *) echo "bilinmeyen komut: $cmd  (meet help)" >&2; exit 1 ;;
+esac
