@@ -71,6 +71,35 @@ for f in .env config.yaml glossary.md glossary-candidates.md CLAUDE.md \
 done
 
 echo
+echo "=== sürüm / yayın tutarlılığı ==="
+# NEDEN VAR: 2026-10-30'da kullanıcı sordu — "yeni commit'i eklemişsin ama yeni
+# release çıkmamışsın, latest release'i alan biri bu değişiklikleri alabilecek mi?"
+# Hayır: `git pull` yapan alır, yayının zip'ini indiren almaz, VE güncelleme
+# kontrolü yerel VERSION ile son YAYINI karşılaştırdığı için kimseye haber bile
+# gitmez. Düzeltme yayında olup kimsenin haberi olmaması en kötü hâl.
+SLUG=$(echo "$REPO_URL" | sed -E 's#.*github\.com[:/]##; s#\.git$##')
+VER=$(tr -d ' \n' < VERSION 2>/dev/null)
+REL=$(gh release view --repo "$SLUG" --json tagName -q .tagName 2>/dev/null)
+echo "  VERSION dosyası : ${VER:-yok}"
+echo "  son yayın       : ${REL:-yok}"
+if [ -z "$REL" ]; then
+  echo "  ⚠ hiç yayın yok — güncelleme kontrolü sessiz kalır"
+else
+  AFTER=$(git rev-list "$REL"..origin/HEAD --count 2>/dev/null || echo "?")
+  echo "  yayından sonraki commit: $AFTER"
+  if [ "${VER#v}" != "${REL#v}" ]; then
+    echo "  ✗ VERSION ile yayın etiketi UYUŞMUYOR — sürüm numarası neyin"
+    echo "    çalıştığını söylemiyor"; FAIL=1
+  fi
+  if [ "$AFTER" != "0" ] && [ "$AFTER" != "?" ]; then
+    echo "  ✗ main'de yayınlanmamış $AFTER commit var — kullanıcılara haber GİTMEZ"
+    echo "    (VERSION'ı yükselt, CHANGELOG'a yaz, etiketle, gh release create)"
+    FAIL=1
+  fi
+  [ "$AFTER" = "0" ] && [ "${VER#v}" = "${REL#v}" ] && echo "  ✓ yayın main ile aynı"
+fi
+
+echo
 echo "=== klonun kullanılabilirliği ==="
 for f in README.md CHANGELOG.md LICENSE VERSION config.example.yaml \
          glossary.example.md docs/SETUP.md docs/GLOSSARY.md docs/ACTION-ITEMS.md \

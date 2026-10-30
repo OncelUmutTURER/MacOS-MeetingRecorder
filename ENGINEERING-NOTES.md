@@ -462,6 +462,21 @@ that button re-transcribed a meeting that already had a transcript, loading 3 GB
 of models to compete with the work the user actually wanted. It now lists meetings
 that have audio but no transcript, newest first.
 
+### An unreleased fix is an unmade fix
+
+Pushing to `main` is not shipping. Three audiences, and the middle one is the worst:
+
+| who | gets the fix |
+|---|---|
+| anyone running `git pull` | yes |
+| anyone who downloaded a release archive | no — the tag still points at older code |
+| anyone doing nothing | **is not even told** — the update check compares the local `VERSION` with the latest *release*, and if both still read 1.0.0 it reports "up to date" |
+
+So `VERSION`, the changelog entry, the tag and the release have to move together.
+`bin/_verifypublic.sh` now fails when `main` has commits the latest release does
+not, or when `VERSION` and the release tag disagree. Without that check the same
+thing recurs silently, which it already did once.
+
 ### macOS: modal dialogs only from the main thread
 
 Moving the update check to a background thread moved its dialog there too. macOS

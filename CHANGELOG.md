@@ -16,6 +16,10 @@ default changed, the entry tells you what was measured.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.0.1] — 2026-10-30
+
 ### Fixed
 
 - The menu bar could only transcribe the *last* meeting, so a meeting the

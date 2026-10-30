@@ -249,7 +249,12 @@ docs/               setup, glossary and action-item guides
 
 ## Releasing (for maintainers)
 
-The update check reads GitHub's latest **release**, so a tag alone is not enough:
+The update check compares the local `VERSION` file with GitHub's latest **release**.
+Three things must move together or nobody hears about your fix: `VERSION`, the
+`CHANGELOG.md` entry, and the release itself. Pushing to `main` alone reaches people
+who run `git pull`, but it does **not** reach anyone who installed from a release zip,
+and it produces no notification at all — the checker still sees matching versions.
+`bin/_verifypublic.sh` fails if `main` has commits the latest release does not.
 
 ```bash
 # 1. bump VERSION and add the entry to CHANGELOG.md, then commit
