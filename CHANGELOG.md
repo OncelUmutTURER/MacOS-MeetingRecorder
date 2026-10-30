@@ -16,7 +16,23 @@ default changed, the entry tells you what was measured.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- The menu bar could only transcribe the *last* meeting, so a meeting the
+  automatic step had skipped could not be recovered from the UI — and the button
+  happily re-transcribed a meeting that already had a transcript, loading 3 GB of
+  models to compete with the work you actually wanted. It now lists every meeting
+  that has audio but no transcript, newest first, and you pick one.
+- `meet stop` wrote its output nowhere: the watcher captured and discarded it, the
+  guard sent it to /dev/null. Two meetings ended up with no transcript and the
+  reason could not be recovered. Every stop now leaves a `stop.log` in the meeting
+  folder, including the traceback if it fails, and the transcription start is
+  verified a few seconds later — if it did not come up, you get a notification
+  instead of silence.
+- Modal dialogs were created from background threads, which macOS refuses
+  (`NSWindow should only be instantiated on the main thread`). The update-check
+  dialog never appeared and the thread died silently. Alerts are now queued and
+  shown from the main thread.
 
 ## [1.0.0] — 2026-10-26
 

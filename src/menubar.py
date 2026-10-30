@@ -97,8 +97,12 @@ class MeetingApp(rumps.App):
         self.i_mic = rumps.MenuItem("Mikrofon Kontrolü", callback=self.miccheck)
         # "İşle" belirsizdi: kullanıcı action item de bekliyordu ama bu sadece
         # transkript üretiyor. Adı ne yaptığını söylesin.
-        self.i_process = rumps.MenuItem("Son Toplantının Transkriptini Çıkar",
-                                        callback=self.process)
+        # Ayrıca "son toplantı" yetmiyordu: otomatik işleme bir toplantıyı
+        # atlayınca geriye dönmenin menüden yolu yoktu. Artık BEKLEYENLERİ
+        # listeleyip seçtiriyor.
+        self.i_process = rumps.MenuItem("Transkript Çıkar")
+        self._proc_index: dict[str, Path] = {}
+        self._proc_sig: str = ""
         self.i_folder = rumps.MenuItem("Meetings Klasörünü Aç", callback=self.open_folder)
         self.i_update = rumps.MenuItem(f"Sürüm {U.current_version()}",
                                        callback=self.check_update)
@@ -123,6 +127,11 @@ class MeetingApp(rumps.App):
         ]
         self._refresh_lang_marks()
         self._refresh_snooze_item()
+        # `_refresh_process_item()` BURADA ÇAĞRILMAZ: alt menü henüz ana menüye
+        # eklenmediği için rumps'ın iç `_menu`'sü None ve `clear()` patlıyor
+        # (AttributeError: 'NoneType' object has no attribute 'removeAllItems').
+        # İlk `tick()` iki saniye içinde zaten kuruyor.
+        self._alerts: list[tuple[str, str]] = []
         self._update_info: dict | None = None
         self._update_check_background()
         self._watcher: threading.Thread | None = None
@@ -135,6 +144,7 @@ class MeetingApp(rumps.App):
     # ------------------------------------------------------------------
     @rumps.timer(2)
     def tick(self, _) -> None:
+        self._drain_alerts()
         self._spin = (getattr(self, "_spin", 0) + 1) % len(SPIN)
 
         # KAYIT HER ZAMAN ÖNCE GELİR. Arka arkaya iki toplantıya girildiğinde
@@ -202,9 +212,9 @@ class MeetingApp(rumps.App):
             else:
                 self.i_stat_mic.title = f"İşleniyor: {prog['label']}"
                 self.i_stat_out.title = detail
-            self.i_process.set_callback(None)
             self.i_mic.set_callback(None)
             self._refresh_actions_item()
+            self._refresh_process_item()
             return
 
         if st:
@@ -212,11 +222,9 @@ class MeetingApp(rumps.App):
             self.i_stat_mic.title = f"Mikrofon: {st['mic']['device']}"
             if st["mic"]["part"] > 1:
                 self.i_stat_mic.title += f"  (parça {st['mic']['part']})"
-            self.i_process.set_callback(None)
             self.i_mic.set_callback(None)
         else:
             self.i_toggle.title = "Kaydı Başlat"
-            self.i_process.set_callback(self.process)
             self.i_mic.set_callback(self.miccheck)
             try:
                 prio = self.cfg["audio"].get("mic_priority") or []
@@ -233,6 +241,7 @@ class MeetingApp(rumps.App):
             except Exception:  # noqa: BLE001
                 self.i_stat_out.title = "Çıkış: ?"
         self._refresh_actions_item()
+        self._refresh_process_item()
 
     MAX_LISTED = 12
 
@@ -382,22 +391,19 @@ class MeetingApp(rumps.App):
             try:
                 res = U.check(self.cfg, force=True)
             except Exception as exc:  # noqa: BLE001
-                rumps.alert(title="Kontrol edilemedi", message=str(exc)[:200], ok="Tamam")
+                self.alert_main("Kontrol edilemedi", str(exc)[:200])
                 return
             if res is None:
-                rumps.alert(
-                    title=f"Sürüm {U.current_version()}",
-                    message=("Yayın bilgisi alınamadı: ağ yok, GitHub'da henüz bir "
-                             "yayın yok ya da kontrol config'ten kapatılmış "
-                             "(updates.enabled)."),
-                    ok="Tamam")
+                self.alert_main(
+                    f"Sürüm {U.current_version()}",
+                    "Yayın bilgisi alınamadı: ağ yok, GitHub'da henüz bir yayın yok "
+                    "ya da kontrol config'ten kapatılmış (updates.enabled).")
                 return
             self._update_info = res
             self._refresh_update_item()
             if not res["newer"]:
-                rumps.alert(title=f"Güncel — {U.current_version()}",
-                            message=f"GitHub'daki son yayın: {res['version']}",
-                            ok="Tamam")
+                self.alert_main(f"Güncel — {U.current_version()}",
+                                f"GitHub'daki son yayın: {res['version']}")
                 return
             cmd = U.update_command()
             try:
@@ -406,16 +412,15 @@ class MeetingApp(rumps.App):
             except Exception:  # noqa: BLE001
                 copied = False
             notes = (res.get("notes") or "").strip()
-            rumps.alert(
-                title=f"Yeni sürüm: {res['version']}",
-                message=(f"Şu an {U.current_version()} kullanıyorsun.\n\n"
+            self.alert_main(
+                f"Yeni sürüm: {res['version']}",
+                (f"Şu an {U.current_version()} kullanıyorsun.\n\n"
                          + (f"{notes[:400]}\n\n" if notes else "")
                          + ("Güncelleme komutu panoya kopyalandı — Terminal'de "
                             "yapıştır:\n\n" if copied else "Terminal'de çalıştır:\n\n")
                          + f"    {cmd}\n\n"
-                         "Bu uygulama kendini güncellemez; kurulumu sen (ya da bir "
-                         "ajan) yaparsın."),
-                ok="Tamam")
+                 "Bu uygulama kendini güncellemez; kurulumu sen (ya da bir "
+                 "ajan) yaparsın."))
             if res.get("url"):
                 subprocess.run(["open", res["url"]], check=False)
         threading.Thread(target=work, daemon=True).start()
@@ -469,25 +474,141 @@ class MeetingApp(rumps.App):
             self.busy = False
             body = (r.stdout or r.stderr).strip()
             summary = body.split("── Değerlendirme")[-1].strip() if "── Değerlendirme" in body else body[-400:]
-            rumps.alert(title="Mikrofon Kontrolü", message=body[-1500:], ok="Tamam")
+            self.alert_main("Mikrofon Kontrolü", body[-1500:])
             notify("Mikrofon kontrolü bitti", summary.splitlines()[-1][:120] if summary else "—",
                    level="info")
         threading.Thread(target=work, daemon=True).start()
 
-    def process(self, _) -> None:
+
+    # ------------------------------------------------------------------
+    # modal uyarılar — YALNIZCA ana iş parçacığından
+    # ------------------------------------------------------------------
+    # macOS kuralı: NSWindow (dolayısıyla rumps.alert) arka plan iş parçacığında
+    # oluşturulamaz. Loglarda gerçekten patladı:
+    #   objc.error: NSInternalInconsistencyException -
+    #   NSWindow should only be instantiated on the main thread!
+    # Uyarı hiç görünmedi, iş parçacığı sessizce öldü. Arka plandaki iş artık
+    # uyarıyı KUYRUĞA koyuyor, `tick()` (rumps zamanlayıcısı = ana iş parçacığı)
+    # bir sonraki turda gösteriyor.
+    def alert_main(self, title: str, message: str) -> None:
+        self._alerts.append((title, message))
+
+    def _drain_alerts(self) -> None:
+        while self._alerts:
+            title, message = self._alerts.pop(0)
+            try:
+                rumps.alert(title=title, message=message, ok="Tamam")
+            except Exception as exc:  # noqa: BLE001
+                notify(title, str(message)[:180], level="warn")
+                print(f"[menubar] uyarı gösterilemedi: {exc}", flush=True)
+
+    def untranscribed(self) -> list[Path]:
+        """Sesi olup transkripti OLMAYAN toplantılar, YENİDEN ESKİYE.
+
+        Eskiden menüde yalnızca "son toplantıyı işle" vardı ve kullanıcı bunu
+        bildirdi: otomatik işleme bir toplantıyı atlarsa (iki kez oldu) geriye
+        dönüp onu işlemenin menüden yolu yoktu, üstelik düğme zaten transkripti
+        olan en son toplantıyı yeniden işliyordu — boşuna 3 GB model yükleyip
+        makineyi meşgul ediyordu.
+
+        `.skip` olanlar sayılmaz: kullanıcı o kaydı bilerek dışarıda bırakmış.
+        """
+        root = meetings_dir(self.cfg)
+        if not root.exists():
+            return []
+        out = []
+        for d in root.iterdir():
+            if not d.is_dir() or (d / ".skip").exists():
+                continue
+            if has_output(d, "transcript.md"):
+                continue
+            wav = d / "sys.wav"
+            mic = d / "mic.wav"
+            if (wav.exists() and wav.stat().st_size > 1024) or \
+               (mic.exists() and mic.stat().st_size > 1024):
+                out.append(d)
+        return sorted(out, key=lambda p: p.name, reverse=True)
+
+    def _refresh_process_item(self) -> None:
+        """Alt menüyü bekleyen toplantılara göre kur.
+
+        Menü her tıklamada değil, liste DEĞİŞİNCE yeniden kuruluyor; aksi halde
+        rumps menüyü sürekli söküp takıyor ve açık menü kapanıyor.
+        """
+        pend = self.untranscribed()
+        sig = "|".join(p.name for p in pend[:self.MAX_LISTED])
+        if sig == getattr(self, "_proc_sig", None):
+            return
+        self._proc_sig = sig
+        self._proc_index = {}
+        try:
+            self.i_process.clear()
+        except AttributeError:
+            # Alt menü henüz ana menüye eklenmemiş (rumps iç `_menu` None). Bir
+            # sonraki turda zaten eklenmiş olacak; imzayı geri alıp çık.
+            self._proc_sig = ""
+            return
+
+        if not pend:
+            self.i_process.title = "Transkripti Bekleyen Yok"
+            self.i_process.add(rumps.MenuItem("Tüm toplantıların transkripti var"))
+            return
+
+        self.i_process.title = f"Transkript Çıkar ({len(pend)} bekliyor)"
+        for d in pend[:self.MAX_LISTED]:
+            title = self._audio_label(d)
+            self._proc_index[title] = d
+            self.i_process.add(rumps.MenuItem(title, callback=self.transcribe_one))
+        if len(pend) > self.MAX_LISTED:
+            self.i_process.add(rumps.MenuItem(
+                f"… ve {len(pend) - self.MAX_LISTED} tane daha "
+                f"(meet pending ile gör)"))
+
+    @staticmethod
+    def _audio_label(d: Path) -> str:
+        """Transkript YOKKEN etiket: süreyi ses dosyasının boyutundan tahmin et.
+
+        `_label` süreyi transcript.json'dan okuyor; burada o dosya henüz yok.
+        16 kHz mono 16-bit → saniyede 32000 bayt.
+        """
+        try:
+            size = max((d / f).stat().st_size for f in ("sys.wav", "mic.wav")
+                       if (d / f).exists())
+            mins = int(size / 32000 // 60)
+            return f"{d.name.replace('-auto', '')}  (~{mins} dk)"
+        except (OSError, ValueError):
+            return d.name.replace("-auto", "")
+
+    def transcribe_one(self, sender) -> None:
+        d = self._proc_index.get(sender.title)
+        if d is None:
+            return
+        if self.busy:
+            notify("Zaten bir işleme sürüyor",
+                   "Bitmesini bekle — iki transkript aynı anda çalışınca ikisi de "
+                   "yavaşlar.", level="warn")
+            return
+
         def work() -> None:
             self.busy = True
-            r = subprocess.run([MEET, "transcribe"], capture_output=True, text=True)
-            self.busy = False
+            try:
+                r = subprocess.run([MEET, "transcribe", str(d)],
+                                   capture_output=True, text=True)
+            finally:
+                self.busy = False
             if r.returncode != 0:
                 tail = "\n".join((r.stderr or r.stdout).strip().splitlines()[-4:])
-                notify("⚠ İşleme başarısız", tail[:200], level="error")
+                notify("⚠ İşleme başarısız", tail[:200], level="error",
+                       subtitle=d.name)
                 return
-            latest = self._latest()
-            tpath = find_output(latest, "transcript.md") if latest else None
+            tpath = find_output(d, "transcript.md")
+            notify("Transkript hazır", d.name, level="info",
+                   open_path=tpath or d)
             if tpath:
                 subprocess.run(["open", str(tpath)], check=False)
         threading.Thread(target=work, daemon=True).start()
+        notify("Transkript başladı", f"{d.name} arka planda işleniyor",
+               subtitle="Menü çubuğunda ilerleme görünecek", level="quiet")
 
     # ------------------------------------------------------------------
     # Action item raporu

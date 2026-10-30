@@ -87,6 +87,8 @@ update.cmd_version(load_config())" ;;
                     echo
                     "$PY" "$ROOT/tests/test_update.py" || exit 1
                     echo
+                    "$PY" "$ROOT/tests/test_pending_transcripts.py" || exit 1
+                    echo
                     exec "$PY" "$ROOT/tests/test_langprior.py" ;;
   inspect)          exec "$ROOT/bin/inspect.sh" "$@" ;;
   pending)          exec "$ROOT/bin/pending.sh" "$@" ;;

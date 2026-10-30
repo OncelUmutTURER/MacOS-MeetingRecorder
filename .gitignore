@@ -38,6 +38,7 @@ mic.parts.json
 *.ffmpeg.log
 guard.log
 process.log
+stop.log
 *-transcript.md
 *-transcript.json
 *-transcript.raw.md

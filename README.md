@@ -123,7 +123,7 @@ in English. Localising the UI is an open issue and a good first pull request.
 | **Toplantıda Otomatik Kaydet** (record automatically) | start when a call starts, stop when it ends |
 | **Otomatik Kaydı Duraklat** (pause auto-recording) | 15 / 30 / 60 min — also stops the current recording, then re-arms itself |
 | **Mikrofon Kontrolü** (microphone check) | 10-second diagnostic recording |
-| **Son Toplantının Transkriptini Çıkar** (transcribe last meeting) | run the pipeline manually |
+| **Transkript Çıkar** (transcribe) | lists every meeting that has audio but no transcript, newest first — pick one |
 | **Action Item Raporu** | prepare the report command for the meetings still waiting |
 | **Meetings Klasörünü Aç** (open meetings folder) | opens the recordings folder |
 | **Sürüm 1.0.0** (version) | current version; says when a newer release exists |

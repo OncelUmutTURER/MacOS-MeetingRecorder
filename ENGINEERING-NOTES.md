@@ -443,6 +443,37 @@ meant the program was quietly fighting its owner. It was removed.
 
 ## Interface lessons
 
+### Automation that leaves no trace cannot be debugged (again)
+
+Two meetings out of roughly 150 ended up with audio but no transcript. The
+recording was complete, the microphone parts were merged, and then nothing. The
+transcription step opens its log file *before* spawning, so the absence of that
+file proves the code never reached it — and that is all it proved, because
+`meet stop` wrote its output nowhere: the watcher captured and discarded it, the
+guard sent it to `/dev/null`.
+
+Every stop now leaves `stop.log` in the meeting folder, traceback included, and
+the transcription start is verified a few seconds later. The root cause is still
+unknown and no guess was recorded; the next occurrence will say.
+
+The companion fix is in the UI: the menu used to offer only "transcribe the last
+meeting", so a skipped meeting could not be recovered without the terminal — and
+that button re-transcribed a meeting that already had a transcript, loading 3 GB
+of models to compete with the work the user actually wanted. It now lists meetings
+that have audio but no transcript, newest first.
+
+### macOS: modal dialogs only from the main thread
+
+Moving the update check to a background thread moved its dialog there too. macOS
+refused (`NSWindow should only be instantiated on the main thread`), the dialog
+never appeared, and the thread died silently — visible only as a traceback in the
+menu bar log. Background work now queues alerts and the timer callback (which runs
+on the main thread) shows them.
+
+A related trap: a rumps submenu cannot be `clear()`ed before it has been added to
+the menu; doing it in `__init__` stops the app from starting at all.
+
+
 **If a button does not do the thing, its name must say so.** The menu item that prepares
 an action-item command cannot generate the report itself, because that needs an
 assistant session. It used to say it did, and silently appeared to do nothing. It now

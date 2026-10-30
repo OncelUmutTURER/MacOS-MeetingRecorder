@@ -14,6 +14,7 @@ Kayıt boyunca bir "guard" süreci sistem çıkışını doğru Multi-Output cih
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import os
@@ -22,6 +23,7 @@ import signal
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import audiodev
@@ -958,12 +960,68 @@ def _rotate_mic(cfg: dict, st: dict, session: Path, name: str, idx: int) -> None
 # stop
 # ==========================================================================
 
+class _Tee:
+    """Yazılanı hem ekrana hem dosyaya geçirir, her satırda flush eder."""
+
+    def __init__(self, path: Path, stream) -> None:
+        self.f = open(path, "a", encoding="utf-8")
+        self.s = stream
+
+    def write(self, b: str) -> int:
+        try:
+            self.s.write(b)
+        except Exception:  # noqa: BLE001 — ekran yoksa dosya yine yazılsın
+            pass
+        self.f.write(b)
+        self.f.flush()
+        return len(b)
+
+    def flush(self) -> None:
+        try:
+            self.s.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        self.f.flush()
+
+    def close(self) -> None:
+        self.f.close()
+
+
 def cmd_stop() -> None:
+    """Kaydı durdurur ve NE OLDUĞUNU toplantı klasörüne yazar.
+
+    `stop.log` 2026-10-30'da eklendi. Sebep: iki toplantıda transkript hiç
+    başlamamıştı ve NEDENİ ÖĞRENİLEMEDİ — çünkü bu fonksiyonun çıktısı hiçbir
+    yere gitmiyordu. Otomatik izleyici `capture_output=True` ile çağırıp sonucu
+    atıyor, guard ise DEVNULL'a yazıyor. Yani durdurma adımı sessiz bir kutuydu:
+    merge başarısız mı oldu, transkript mi başlatılamadı, bir istisna mı atıldı —
+    hiçbiri görünmüyordu.
+
+    İZ BIRAKMAYAN OTOMASYON HATA AYIKLANAMAZ. Durdurma yolunda yeni kod yazarken
+    `print` kullan; bu sarmalayıcı onu kalıcı hâle getiriyor.
+    """
     cfg = load_config()
     st = read_state()
     if st is None:
         die("Aktif kayıt yok.")
     session = Path(st["session_dir"])
+    tee = _Tee(session / "stop.log", sys.stdout)
+    try:
+        with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
+            print(f"\n=== meet stop · {dt.datetime.now():%Y-%m-%d %H:%M:%S} ===")
+            _stop_body(cfg, st, session)
+    except Exception:  # noqa: BLE001
+        tee.write("\n!!! DURDURMA SIRASINDA İSTİSNA\n" + traceback.format_exc())
+        notify("⚠ Kayıt durdurulurken hata",
+               "Ses dosyaları yerinde olabilir ama transkript başlamamış olabilir.",
+               subtitle=f"Ayrıntı: {session.name}/stop.log", level="error",
+               open_path=session)
+        raise
+    finally:
+        tee.close()
+
+
+def _stop_body(cfg: dict, st: dict, session: Path) -> None:
 
     # İkisine de önce sinyali gönder, SONRA bekle. Sırayla durdurursak ikinci süreç
     # birincinin kapanışını beklediği kadar fazladan kaydediyor (ölçüldü: 3 sn).
@@ -1059,10 +1117,28 @@ def _start_transcription(session: Path) -> None:
         return
     meet = Path(__file__).resolve().parent.parent / "bin" / "meet"
     log = open(session / "process.log", "wb")
-    subprocess.Popen([str(meet), "transcribe", str(session)], stdin=subprocess.DEVNULL,
-                     stdout=log, stderr=log, start_new_session=True)
-    print(f"\n  Transkript arka planda başladı.\n"
+    proc = subprocess.Popen([str(meet), "transcribe", str(session)],
+                            stdin=subprocess.DEVNULL,
+                            stdout=log, stderr=log, start_new_session=True)
+    print(f"\n  Transkript arka planda başladı (pid {proc.pid}).\n"
           f"  İlerleme: tail -f \"{session / 'process.log'}\"")
+
+    # BAŞLADIĞINI DOĞRULA. İki toplantıda transkript hiç çıkmadı ve bunu fark
+    # etmek günler sürdü; sessizce başlamayan bir süreç, hiç denenmemişten
+    # ayırt edilemiyordu. Birkaç saniye bekleyip gerçekten ayakta mı diye bak.
+    time.sleep(4)
+    if proc.poll() is not None or _transcription_running(session) is None:
+        tail = ""
+        try:
+            tail = (session / "process.log").read_text(
+                encoding="utf-8", errors="replace").strip().splitlines()[-3:]
+            tail = " | ".join(tail)
+        except OSError:
+            pass
+        print(f"  ⚠ TRANSKRİPT BAŞLAMADI (çıkış kodu {proc.poll()}). {tail}")
+        notify("⚠ Transkript başlamadı", "Menüden 'Transkript Çıkar' ile elle "
+               "başlatabilirsin.", subtitle=session.name, level="error",
+               open_path=session)
 
 
 def _assemble_mic(session: Path, parts: list[dict]) -> None:
