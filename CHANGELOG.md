@@ -18,6 +18,30 @@ default changed, the entry tells you what was measured.
 
 Nothing yet.
 
+## [1.0.2] — 2026-10-30
+
+### Fixed
+
+- Pausing automatic recording did not reliably keep it paused. Three separate
+  holes, each able to produce it on its own:
+  - The watcher only reset its "microphone has been active for N seconds" timer
+    when **it** had started the recording. A recording started from the menu bar
+    left that timer running for the whole meeting, so the moment the recording
+    stopped the 15-second condition was already satisfied and a new one began
+    instantly.
+  - `meet snooze` stopped the recording *before* writing the pause. Stopping
+    clears the recording state in its first second but merging the microphone
+    parts takes seconds longer, and in that window there was neither a recording
+    nor a pause on disk — enough for the watcher to start again. The pause is now
+    written first.
+  - A manual `meet start` ignored the pause entirely, so the menu bar could show
+    "paused" and "recording" at the same time. Starting by hand now cancels the
+    pause and says so; an automatic start during a pause is refused.
+- Recordings left no record of who started them. The folder name only shows the
+  title, which made it impossible to tell afterwards whether the menu bar, the
+  watcher or a terminal had started a given meeting. `start.log` now records the
+  caller, and `stop.log` does the same for the stop.
+
 ## [1.0.1] — 2026-10-30
 
 ### Fixed

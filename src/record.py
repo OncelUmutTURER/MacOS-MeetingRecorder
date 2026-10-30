@@ -292,8 +292,45 @@ def _wait_for_data(proc: subprocess.Popen, target: Path, log: Path, label: str,
 # start
 # ==========================================================================
 
+def _caller() -> str:
+    """Bizi KİM çağırdı — üst sürecin komut satırı.
+
+    2026-10-30'da "duraklattım ama kayıt yine başladı" olayında bu bilgi yoktu ve
+    kaydı menü çubuğunun mu, izleyicinin mi, terminalin mi başlattığı LOGLARDAN
+    ANLAŞILAMADI. Klasör adı yalnızca başlık veriyor (`-auto` varsa izleyici), o da
+    elle başlatmaları ayırt etmeye yetmiyor.
+    """
+    try:
+        ppid = os.getppid()
+        r = subprocess.run(["ps", "-o", "args=", "-p", str(ppid)],
+                           capture_output=True, text=True, timeout=3)
+        return f"pid {ppid}: {r.stdout.strip()[:120] or '?'}"
+    except Exception:  # noqa: BLE001
+        return "bilinmiyor"
+
+
 def cmd_start(title: str | None = None, limit_min: float | None = None) -> None:
     cfg = load_config()
+
+    # DURAKLATMA ELLE BAŞLATMAYI DA İLGİLENDİRİR. Eskiden `snooze` yalnızca
+    # izleyiciyi durduruyordu; `meet start` (ve menüdeki "Kaydı Başlat") duraklatma
+    # açıkken bile kaydı başlatıyordu. Sonuç: menü çubuğu hem "⏸ duraklatıldı"
+    # hem "● KAYITTA" gösteriyor — kullanıcı haklı olarak "duraklattım ama yine
+    # kayıt başladı" diyor.
+    #
+    # Çözüm çelişkiyi kaldırmak: ELLE başlatmak duraklatmayı iptal eder ve bunu
+    # söyler (niyet açık: şimdi kaydetmek istiyorsun). Otomatik başlatma ise
+    # duraklatma varken reddedilir — izleyici zaten kontrol ediyor, bu ikinci kat.
+    if (snz := snooze_info()):
+        if (title or "").strip().lower() == "auto":
+            die(f"Otomatik kayıt duraklatılmış ({snz['left'] / 60:.0f} dk kaldı) "
+                f"— başlatılmadı.")
+        clear_snooze()
+        print(f"  not: otomatik kayıt duraklatması kaldırıldı "
+              f"({snz['left'] / 60:.0f} dk kalmıştı) — elle kayıt başlatıldı")
+        notify("Duraklatma kaldırıldı", "Elle kayıt başlattığın için iptal edildi.",
+               subtitle=f"{snz['left'] / 60:.0f} dakika kalmıştı", level="quiet")
+
     if (st := read_state()) is not None:
         if _alive(st.get("sys", {}).get("pid")) or _alive(st.get("mic", {}).get("pid")):
             die(f"Zaten kayıt sürüyor: {st['session_dir']}  (durdurmak için: meet stop)")
@@ -312,6 +349,14 @@ def cmd_start(title: str | None = None, limit_min: float | None = None) -> None:
     stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
     session = mdir / (f"{stamp}-{_slug(title)}" if title else stamp)
     session.mkdir(parents=True, exist_ok=True)
+    # KİM BAŞLATTI — iz bırak. Bu satır olmadığı için bir kaydın menüden mi
+    # izleyiciden mi başladığı sonradan anlaşılamadı.
+    try:
+        (session / "start.log").write_text(
+            f"{dt.datetime.now():%Y-%m-%d %H:%M:%S} · başlık={title!r}\n"
+            f"çağıran: {_caller()}\n", encoding="utf-8")
+    except OSError:
+        pass
 
     # --- çıkış cihazını doğru Multi-Output'a al -----------------------------
     prev_out = None
@@ -648,8 +693,15 @@ def cmd_snooze(arg: str | None) -> None:
         return
 
     mins = float(arg)
-    # Asıl amaç "bu konuşma kaydedilmesin": süren kayıt da durmalı, yoksa
-    # duraklatma yalnızca bir sonrakini etkiler ve kullanıcı yine elle uğraşır.
+    # SIRA KRİTİK: önce duraklatmayı YAZ, sonra kaydı durdur.
+    #
+    # Tersi bir yarış açıyordu ve 2026-10-30'da kullanıcı bunu yaşadı: `cmd_stop`
+    # daha ilk saniyelerinde durum dosyasını siliyor, ama mikrofon parçalarının
+    # birleştirilmesi saniyeler (uzun toplantıda onlarca saniye) sürüyor. O
+    # pencerede ortada ne kayıt durumu ne de duraklatma dosyası var — izleyici
+    # "kayıt yok, mikrofon aktif" görüp yeni kayıt başlatabiliyor. Duraklatma
+    # dosyası önce yazılırsa böyle bir an hiç oluşmuyor.
+    set_snooze(mins * 60, "kullanıcı")
     stopped = False
     if read_state() is not None:
         try:
@@ -657,7 +709,6 @@ def cmd_snooze(arg: str | None) -> None:
             stopped = True
         except SystemExit:
             pass
-    set_snooze(mins * 60, "kullanıcı")
     print(f"\nOtomatik kayıt {mins:.0f} dakika duraklatıldı"
           + (" (süren kayıt durduruldu)" if stopped else "")
           + f".\nKendiliğinden yeniden açılacak — elle açmak için: meet snooze off")
@@ -1009,6 +1060,7 @@ def cmd_stop() -> None:
     try:
         with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
             print(f"\n=== meet stop · {dt.datetime.now():%Y-%m-%d %H:%M:%S} ===")
+            print(f"çağıran: {_caller()}")
             _stop_body(cfg, st, session)
     except Exception:  # noqa: BLE001
         tee.write("\n!!! DURDURMA SIRASINDA İSTİSNA\n" + traceback.format_exc())

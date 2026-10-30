@@ -338,6 +338,16 @@ def watch_loop(cfg: dict, meet: Path, should_run=None) -> None:
             now = time.time()
             recording = read_state() is not None
 
+            if recording:
+                # BAYAT SAYAÇ TEMİZLİĞİ. `hot_since` yalnızca kaydı BİZ
+                # başlattığımızda sıfırlanıyordu. Kullanıcı menüden (ya da
+                # terminalden) kayıt başlatırsa izleyici o sırada çoktan
+                # "mikrofon aktif" saymaya başlamış oluyor ve sayaç kayıt boyunca
+                # öylece duruyor. Kayıt bittiği anda `now - hot_since` dakikalar
+                # ediyor ve 15 saniyelik koşul ANINDA sağlanıyor: durdurduğun
+                # kayıt saniyesinde yeniden başlıyor.
+                hot_since = None
+
             if not recording:
                 # Otomatik kayıt duraklatılmış olabilir. İki sebep:
                 #   kullanıcı — "bu sohbet kaydedilmesin" (menüden süreli duraklatma)

@@ -462,6 +462,32 @@ that button re-transcribed a meeting that already had a transcript, loading 3 GB
 of models to compete with the work the user actually wanted. It now lists meetings
 that have audio but no transcript, newest first.
 
+### A pause that did not hold
+
+Pausing automatic recording stopped the current recording, showed the countdown —
+and a new recording started anyway. The exact trigger of the reported incident
+could not be recovered from the logs, because nothing recorded *which process*
+called `meet start`. Three real holes were found in the code, each sufficient on
+its own:
+
+- The watcher reset its "microphone active for N seconds" timer only when it had
+  started the recording itself. A recording started from the menu bar left that
+  timer accumulating for the whole meeting, so the instant it stopped the
+  start condition was already true.
+- The pause was written *after* the recording was stopped. Stopping clears the
+  state in its first second, but merging the microphone parts takes seconds
+  longer; in that window neither a recording nor a pause existed on disk.
+- A manual start ignored the pause entirely, so the UI could show "paused" and
+  "recording" simultaneously.
+
+Fixes: reset the timer whenever a recording is observed; write the pause first;
+and make a manual start cancel the pause explicitly while an automatic start
+during a pause is refused.
+
+The lasting change is the smallest one: `start.log` and `stop.log` now record the
+calling process. **Automation that does not record who triggered an action leaves
+you helpless at the next report**, which is exactly what happened here.
+
 ### An unreleased fix is an unmade fix
 
 Pushing to `main` is not shipping. Three audiences, and the middle one is the worst:

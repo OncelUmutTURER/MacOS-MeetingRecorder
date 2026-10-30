@@ -39,6 +39,7 @@ mic.parts.json
 guard.log
 process.log
 stop.log
+start.log
 *-transcript.md
 *-transcript.json
 *-transcript.raw.md
