@@ -81,33 +81,150 @@ useless. Tools read both the stamped and the old flat name, but write the stampe
 
 ## 2. Automate it with an assistant that can read files
 
-If your assistant can open files on your Mac (Claude Code, Claude in Cowork, or any
-agent with filesystem access), you can hand it the job instead of pasting:
+If your assistant can open files on your Mac (Claude Code, Claude in Cowork, or any agent
+with filesystem access), hand it the job instead of pasting. Two pieces: a **skill** that
+teaches it how to write a report, and a **scheduled task** that runs daily so you never
+think about it.
 
-> Process the meetings in `~/Meetings` that have a transcript but no
-> `*-action-items.md`. Oldest first, at most 5 per run. For each one, read the
-> transcript, use `glossary.md` to interpret mangled terms, and write the report into
-> the same folder using the template in `docs/ACTION-ITEMS.md`. Append one line per run
-> to `~/Meetings/.action-items-log.md`: what you processed, what you skipped, how many
-> are still waiting.
+### 2a. The skill
 
-Three things we learned running this daily on a backlog of 80 meetings:
+Save this as a skill (in Claude Cowork: ask it to save a skill named `meeting-actions`;
+in Claude Code: `.claude/skills/meeting-actions/SKILL.md`). Replace the two paths and the
+`me.label` name with yours.
+
+````markdown
+---
+name: "meeting-actions"
+description: "Turn recorded meeting transcripts in ~/Meetings into English action-item
+  reports. Use when the user asks to process a meeting, generate action items or
+  summarise a meeting."
+---
+
+# Meeting Actions
+
+Each meeting is a folder `~/Meetings/YYYY-MM-DD-HHMM[-title]/`. The leading
+`YYYY-MM-DD-HHMM` is the meeting's **stamp**, and output files carry it in their name.
+
+## Hard rules
+
+1. **The report is always in <REPORT LANGUAGE>**, whatever language the meeting was in.
+2. **Keep technical terms, product, company and site names exactly as spoken.** Never
+   translate them.
+3. **Never invent anything.** Owner or date not stated → `not stated`. Unsure whether
+   something is a commitment → Open Questions, not Action Items.
+4. **Never overwrite an existing report.** If `<stamp>-action-items.md` (or a legacy
+   bare `action-items.md`) exists, that meeting is done.
+5. **Write to `<stamp>-action-items.md`.** The pipeline detects processed meetings by
+   that name. If your write tool alters the filename, rename it back — otherwise the
+   meeting is listed as pending forever.
+6. **Skip folders containing a `.skip` file.** That marker is deliberate.
+7. `*-action-items.superseded.md` is **not** a report. A folder holding only that is
+   still pending: it is the old report of a meeting that was later split in two.
+
+## Steps
+
+1. **Pick what to process.** If the user named a folder, do exactly that one. If they
+   said "last meeting", take the most recent. Otherwise take pending meetings
+   **newest first, at most 5**.
+2. **Load the glossary** from `<PROJECT>/glossary.md` and use it to repair speech
+   recognition damage silently. If you meet a new mishearing you are confident about,
+   mention it in your reply so it can be added — do not edit the glossary yourself.
+3. **Read the transcript.** Format is `**[HH:MM:SS] Speaker:** text`.
+   - `<YOUR NAME>` is the user, from the microphone channel; that label is always right.
+   - `SPEAKER_00 / SPEAKER_01 / …` are the others. If someone is addressed by name, map
+     it: `SPEAKER_00 (likely Alex)`. If unsure, leave the label.
+   - The header block lists channel levels, languages and warnings. If a warning
+     suggests the transcript is incomplete, say so at the end of the report.
+   - **Ignore prompt-echo lines** — whisper sometimes writes the jargon list into the
+     transcript as if spoken. Nobody said that.
+   - Transcripts sometimes end mid-sentence. Say so rather than guessing.
+   - Meetings contain personal and off-topic talk. Leave it out and note roughly how
+     much was skipped.
+4. **Write the report** to `<folder>/<stamp>-action-items.md`:
+
+   ```markdown
+   # Action Items — <folder name>
+
+   - **Meeting language:** <e.g. Turkish with English technical terms>
+   - **Participants:** <YOUR NAME> · SPEAKER_00 (likely …) · SPEAKER_01
+   - **Duration:** HH:MM:SS
+
+   ## Summary
+   Three to six sentences on what the meeting was about and where it landed.
+
+   ## Decisions
+   - <decision> — [HH:MM:SS]
+
+   ## Action Items
+   | # | Action | Owner | Due | Source |
+   |---|---|---|---|---|
+   | 1 | <what will be done> | <owner> | 2026-08-22 | [00:14:03] |
+
+   ## Open Questions
+   - <unresolved point> — [HH:MM:SS]
+
+   ## My Items
+   - [ ] <checklist of just the items the user owns>
+   ```
+
+   - Every decision and action item carries a `[HH:MM:SS]` timestamp.
+   - Capture items owned by **anyone**, not just the user.
+   - No decisions → `No firm decisions were reached in this meeting.`
+     No action items → replace the table with `No action items identified.`
+   - Convert relative dates to absolute where the meeting date makes it unambiguous,
+     keeping the original phrasing in parentheses.
+   - If two people claim the same task at different timestamps, flag it under Open
+     Questions rather than silently picking one.
+   - A transcript with fewer than ~40 speech lines is probably a false auto-record
+     trigger: write a short report saying so instead of inventing content.
+5. **Report back** in chat: one line per meeting — folder, number of action items, short
+   gist — then how many are still pending. Do not paste report contents into the reply.
+````
+
+### 2b. The daily scheduled task
+
+Ask your assistant to create a scheduled task (Claude Cowork has one built in; `cron`
+plus `claude -p` works too) with cron `0 8 * * *` and this prompt:
+
+> Generate action-item reports for up to FIVE recorded meetings that are still waiting
+> for one, using the `meeting-actions` skill. Work entirely from local files.
+>
+> A folder in `~/Meetings/` is PENDING when it has `<stamp>-transcript.md`, has **no**
+> `<stamp>-action-items.md` (a `*-action-items.superseded.md` does not count) and has no
+> `.skip` file. Sort pending folders by name and process the **five NEWEST**.
+>
+> Afterwards append ONE block to `~/Meetings/.action-items-log.md` (create it if
+> missing), even when nothing was pending:
+>
+> ```
+> ## <YYYY-MM-DD HH:MM>
+> - processed (<n>): <folder> · <folder> · …
+> - skipped: <folder — reason>, … (or "none")
+> - still pending (<n>): <folder> · <folder> · …
+> ```
+>
+> Never rewrite earlier entries; only append.
+
+Three things learned running this daily on a backlog of 80 meetings:
 
 **Process the newest first, not the oldest.** Obvious in hindsight: you want yesterday's
 notes today. It also matters mechanically — a meeting split with `meet split` keeps the
 *original* timestamp, so every split jumps to the front of an oldest-first queue and
-pushes today's meetings back. That looked exactly like the job repeating itself.
+pushes today's meetings back. That looked exactly like the job repeating itself, and
+cost a day of investigation.
 
 **Five per run.** Transcripts are large. 80 of them came to 3.5 MB and 41,000 lines —
 far beyond what fits in one session.
 
-**Write a log line every run.** Automation that leaves no trace cannot be debugged. When
-the ordering problem above appeared, nothing on disk could say what had happened; the
-log is what made the diagnosis possible.
+**Write a log line every run, including the empty ones.** Automation that leaves no trace
+cannot be debugged. When the ordering problem above appeared, nothing on disk could say
+what had happened; the log is what made the diagnosis possible.
 
-`.superseded.md` files do not count as reports. `meet split` renames the old report to
-that when a recording is split, because it described two meetings as one, and both
-halves then correctly show up as pending again.
+### 2c. Keeping the two in sync
+
+The skill and the scheduled task repeat the report template on purpose — the task runs
+without a human present and must not depend on a skill being loaded. If you change the
+template, change both, or your reports stop matching each other.
 
 ---
 

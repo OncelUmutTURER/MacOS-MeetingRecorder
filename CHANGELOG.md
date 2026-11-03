@@ -18,6 +18,18 @@ default changed, the entry tells you what was measured.
 
 Nothing yet.
 
+## [1.0.3] — 2026-11-03
+
+### Added
+
+- `docs/ACTION-ITEMS.md` now contains the two automation pieces in full, which were
+  only alluded to before: a copy-pasteable **skill file** that teaches an assistant how
+  to write a report, and the **daily scheduled task** prompt that runs it unattended.
+  Both carry the rules learned from running this on a backlog of 80 meetings — newest
+  first, five per run, and a log line on every run including the empty ones.
+- A note on why the skill and the task repeat the report template instead of sharing it:
+  the task runs with nobody present and must not depend on a skill being loaded.
+
 ## [1.0.2] — 2026-10-30
 
 ### Fixed
