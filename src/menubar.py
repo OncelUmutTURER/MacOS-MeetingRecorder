@@ -541,13 +541,22 @@ class MeetingApp(rumps.App):
             return
         self._proc_sig = sig
         self._proc_index = {}
+        # rumps'ta hiç çocuğu OLMAYAN bir MenuItem'ın alt menüsü (iç `_menu`)
+        # henüz yaratılmamıştır ve `clear()` AttributeError atar. Temizlenecek
+        # bir şey de yoktur: devam et ve çocukları ekle — ilk `add()` alt menüyü
+        # kendisi yaratır.
+        #
+        # Burada bir ara `return` vardı ve KALICI BİR KİLİT yarattı: madde hiç
+        # çocuk almadığı için `_menu` hep None kaldı, her turda aynı istisna
+        # atıldı, alt menü hiç kurulmadı. macOS çocuğu ve callback'i olmayan bir
+        # maddeyi gri gösterdiği için "Transkript Çıkar" 17 gün boyunca tıklanamaz
+        # durdu ve kullanıcı bekleyen toplantıları göremedi (2026-11-16).
+        # İstisnayı yutan kod, yutulan şeyin bir dahaki tura kendiliğinden
+        # düzeleceğini VARSAYMAMALI.
         try:
             self.i_process.clear()
         except AttributeError:
-            # Alt menü henüz ana menüye eklenmemiş (rumps iç `_menu` None). Bir
-            # sonraki turda zaten eklenmiş olacak; imzayı geri alıp çık.
-            self._proc_sig = ""
-            return
+            pass
 
         if not pend:
             self.i_process.title = "Transkripti Bekleyen Yok"

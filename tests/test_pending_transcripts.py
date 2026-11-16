@@ -50,6 +50,32 @@ def make(root: Path, name: str, *, audio=True, transcript=False, skip=False,
     return d
 
 
+def _handler_returns(src: str, func: str) -> bool:
+    """`func` içindeki `except AttributeError` dalı `return` ediyor mu?
+
+    rumps'ta hiç çocuğu olmayan bir MenuItem'da `clear()` AttributeError atar.
+    Bu istisnayı yakalayıp ÇIKMAK kalıcı bir kilit yaratıyor: madde hiç çocuk
+    almadığı için alt menüsü hiç yaratılmıyor, her turda aynı istisna atılıyor
+    ve macOS maddeyi gri gösteriyor. "Transkript Çıkar" 17 gün tıklanamaz
+    kaldı ve kullanıcı bekleyen toplantıları göremedi.
+
+    Metin aramak yerine ağaca bakılıyor; yorum satırındaki bir `return` kelimesi
+    testi yanıltmasın.
+    """
+    import ast
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == func):
+            continue
+        for h in (x for x in ast.walk(node) if isinstance(x, ast.ExceptHandler)):
+            name = getattr(h.type, "id", None)
+            if name == "AttributeError" and any(
+                    isinstance(n, ast.Return) for n in ast.walk(h)):
+                return True
+        return False
+    raise AssertionError(f"{func} bulunamadı")
+
+
 def check(label: str, got, want) -> bool:
     ok = got == want
     print(f"  {'✓' if ok else '✗'}  {label}" + ("" if ok else f"   (={got!r}, beklenen {want!r})"))
@@ -104,6 +130,12 @@ def main() -> int:
         ok &= check(label, frag in src, True)
     ok &= check("eski 'son toplantıyı işle' düğmesi kalmadı",
                 "Son Toplantının Transkriptini Çıkar" in src, False)
+
+    print("\nalt menü gerçekten kuruluyor mu (2026-11-16 vakası):")
+    ok &= check("clear() AttributeError'ında ÇIKILMIYOR",
+                _handler_returns(src, "_refresh_process_item"), False)
+    ok &= check("aynısı action item menüsünde de",
+                _handler_returns(src, "_refresh_actions_item"), False)
 
     print("\nstop teşhisi (iz bırakmayan otomasyon hata ayıklanamaz):")
     rec = (ROOT / "src" / "record.py").read_text(encoding="utf-8")

@@ -18,6 +18,35 @@ default changed, the entry tells you what was measured.
 
 Nothing yet.
 
+## [1.0.4] — 2026-11-16
+
+### Fixed
+
+- **"Transcribe a meeting" in the menu bar was permanently greyed out**, so meetings
+  the automatic step had missed could not be recovered from the UI at all — the
+  feature added in 1.0.1 never actually worked. In rumps, a menu item that has never
+  had a child has no submenu object yet and `clear()` raises `AttributeError`. The
+  handler for that caught the error and *returned*, so the item never got a child, so
+  the submenu was never created, so the next tick raised the same error. A permanent
+  lock, and macOS greys out an item with neither a child nor a callback. The handler
+  now falls through and adds the children, which is what creates the submenu. The
+  lesson is general: **code that swallows an exception must not assume the next
+  attempt will be any different.**
+- **A meeting that had two stops racing never got a transcript.** The duplicate
+  guard runs `pgrep -f "pipeline.py --transcribe <meeting>"`. `pgrep` excludes
+  itself but not *another* `pgrep` running at the same moment, and the pattern is
+  on that one's command line too. Two stops firing in the same second therefore each
+  saw the other's `pgrep`, concluded a transcription was already running, and neither
+  started one — a 74-minute meeting left with audio, no transcript, and not even a
+  `process.log` to show it had been attempted. Candidate pids are now verified with
+  `ps` and `pgrep`/`ps` processes are discarded.
+- **Stopping is now exclusive per meeting.** The menu bar's "Stop recording" and the
+  watcher's "output idle for 25 s" can land in the same second; both ran the full
+  stop, merging the 33 microphone parts twice (the second merge failed looking for a
+  part the first had already deleted). A lock file in the meeting folder makes the
+  second stop a no-op, and it says so in `stop.log`. A stale lock from a crashed stop
+  is taken over, so a single crash cannot block every later stop.
+
 ## [1.0.3] — 2026-11-03
 
 ### Added

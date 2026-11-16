@@ -1038,6 +1038,40 @@ class _Tee:
         self.f.close()
 
 
+def _claim_stop(session: Path) -> int | None:
+    """Durdurmayı bu sürece kilitler. Kilit başkasındaysa onun pid'ini döner.
+
+    Durdurma iki yoldan tetiklenebiliyor — menüdeki "Kaydı Durdur" ve izleyicinin
+    "çıkış 25 sn boşta" kararı — ve ikisi aynı saniyeye denk gelebiliyor.
+    2026-11-11-1448-auto'da tam olarak bu oldu: iki `meet stop` yan yana koştu,
+    mikrofon parçalarını İKİ KEZ birleştirdiler (ikincisi birincinin sildiği
+    parçayı arayıp hata verdi) ve transkript adımında birbirlerini "zaten
+    çalışan transkript" sanıp ikisi de vazgeçti.
+
+    Kilit dosyası `<toplantı>/.stop.lock`. Sahibi ölmüşse (çökmüş durdurma)
+    devralınır — yoksa bir kaza bütün sonraki durdurmaları kilitler.
+    """
+    lock = session / ".stop.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            owner = int(lock.read_text().strip() or 0)
+        except (OSError, ValueError):
+            owner = 0
+        if owner and owner != os.getpid() and _alive(owner):
+            return owner
+        with contextlib.suppress(OSError):   # bayat kilit: devral
+            lock.unlink()
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except OSError:
+            return None                      # kilit kurulamadı: engelleme
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    return None
+
+
 def cmd_stop() -> None:
     """Kaydı durdurur ve NE OLDUĞUNU toplantı klasörüne yazar.
 
@@ -1061,6 +1095,10 @@ def cmd_stop() -> None:
         with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
             print(f"\n=== meet stop · {dt.datetime.now():%Y-%m-%d %H:%M:%S} ===")
             print(f"çağıran: {_caller()}")
+            if (other := _claim_stop(session)) is not None:
+                print(f"  Bu toplantıyı başka bir durdurma zaten kapatıyor "
+                      f"(pid {other}); bu çağrı hiçbir şey yapmadı.")
+                return
             _stop_body(cfg, st, session)
     except Exception:  # noqa: BLE001
         tee.write("\n!!! DURDURMA SIRASINDA İSTİSNA\n" + traceback.format_exc())
@@ -1140,11 +1178,37 @@ def _stop_body(cfg: dict, st: dict, session: Path) -> None:
         print(f"  İşlemek için: meet transcribe \"{session}\"")
 
 
+def _argv(pid: int) -> str:
+    """Bir sürecin tam komut satırı; okunamıyorsa boş dize."""
+    r = subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def _real_pids(out: str) -> list[int]:
+    """pgrep çıktısından GERÇEK süreçleri süzer — pgrep'in kendisini eler.
+
+    `pgrep -f DESEN` kendi sürecini elemekle yetinir; AYNI ANDA çalışan BAŞKA
+    bir pgrep'i elemez, oysa desen o pgrep'in de komut satırında yazılıdır.
+    İki süreç aynı anda bu kontrolü yaparsa her biri ÖTEKİ PGREP'i "çalışan
+    transkript" sanır.
+
+    Bu teorik değil, yaşandı (2026-11-11-1448-auto): menüden durdurma ile
+    izleyicinin otomatik durdurması aynı saniyede çalıştı, iki `meet stop`
+    doğdu, ikisi de "transkript zaten çalışıyor (pid 61592 / 61593)" yazıp
+    vazgeçti — o iki pid birbirinin pgrep'iydi. 74 dakikalık toplantının
+    transkripti hiç çıkmadı, klasörde `process.log` bile oluşmadı.
+    """
+    pids = [int(p) for p in out.split() if p.strip().isdigit()]
+    return [p for p in pids
+            if Path(_argv(p).split(" ")[0] or "x").name not in ("pgrep", "ps")]
+
+
 def _transcription_running(session: Path) -> int | None:
     """Bu toplantı için zaten çalışan bir transkript süreci varsa pid'ini döner."""
     r = subprocess.run(["pgrep", "-f", f"pipeline.py --transcribe {session}"],
                        capture_output=True, text=True)
-    pids = [int(p) for p in r.stdout.split() if p.strip().isdigit()]
+    pids = _real_pids(r.stdout)
     return pids[0] if pids else None
 
 
@@ -1152,7 +1216,7 @@ def _any_transcription_running() -> bool:
     """Herhangi bir toplantının transkripti sürüyor mu (hangisi olduğu fark etmez)."""
     r = subprocess.run(["pgrep", "-f", "pipeline.py --transcribe"],
                        capture_output=True, text=True)
-    return bool(r.stdout.strip())
+    return bool(_real_pids(r.stdout))
 
 
 def _start_transcription(session: Path) -> None:

@@ -456,6 +456,53 @@ Every stop now leaves `stop.log` in the meeting folder, traceback included, and
 the transcription start is verified a few seconds later. The root cause is still
 unknown and no guess was recorded; the next occurrence will say.
 
+### And it said: two `pgrep`s matching each other
+
+It happened again three weeks later, and this time the log answered in one read.
+Two `meet stop` processes had run **in the same second** — one from the menu bar
+button, one from the watcher's "output idle for 25 s" decision. Every line was
+written twice, the 33 microphone parts were merged twice (the second merge failed
+looking for a part the first had already deleted), and at the end:
+
+```
+Bu toplantı için transkript zaten çalışıyor (pid 61592), ikinci süreç başlatılmadı.
+Bu toplantı için transkript zaten çalışıyor (pid 61593), ikinci süreç başlatılmadı.
+```
+
+Consecutive, short-lived pids — not transcription processes but the two stops'
+own `pgrep`s. The duplicate guard runs `pgrep -f "pipeline.py --transcribe
+<meeting>"`; `pgrep` excludes itself, but not another `pgrep` running at the same
+instant, whose command line contains the pattern as an argument. Each stop saw
+the other's `pgrep`, believed a transcription was already running, and gave up.
+
+Two defences. Candidate pids are verified with `ps` and anything that is itself a
+`pgrep` or `ps` is discarded — and because the real risk is over-filtering, the
+test also asserts that a genuine process carrying the pattern survives the filter.
+And stopping is now exclusive per meeting via a lock file, with a stale lock from
+a crashed stop taken over, so one crash cannot block every later stop.
+
+A useful reminder when reading these folders: "no transcript" is not one fault.
+The same week another meeting stopped at the diarization step because the model
+download failed mid-way (`Server disconnected without sending a response`), which
+`process.log` says plainly. Which file exists tells you how far it got.
+
+### Code that swallows an exception must not assume the next attempt differs
+
+The "pick a meeting to transcribe" menu added above was greyed out and unclickable
+for seventeen days: the feature never worked at all, and nobody could tell from the
+outside because a disabled menu item looks like a design decision.
+
+In rumps, a menu item that has never had a child has no submenu object yet, and
+`clear()` on it raises `AttributeError`. The handler caught that and *returned* —
+so the item never got a child, so the submenu was never created, so the next tick
+raised the same error. A permanent lock, and macOS greys out an item with neither
+a child nor a callback. The sibling menu that handles the same exception with
+`pass` had worked correctly the whole time; that was the only difference.
+
+The fix is one word, but the test is the point: it parses the source and asserts
+that the `except AttributeError` branch contains no `Return` node. Searching for
+text would have been fooled by the word appearing in a comment.
+
 The companion fix is in the UI: the menu used to offer only "transcribe the last
 meeting", so a skipped meeting could not be recovered without the terminal — and
 that button re-transcribed a meeting that already had a transcript, loading 3 GB
